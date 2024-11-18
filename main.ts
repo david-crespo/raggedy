@@ -5,7 +5,24 @@ import { walk } from 'jsr:@std/fs@1.0/walk'
 import $ from 'jsr:@david/dax@0.42.0'
 import { askClaude } from './llm.ts'
 
-// TODO: CLI help string
+const HELP = $.dedent`
+  Answer a question based on a directory of Markdown or AsciiDoc files. Requires
+  \`ANTHROPIC_API_KEY\` to be set.
+
+  # Usage
+
+  \`\`\`sh
+  ./main.ts <directory> <question>
+  \`\`\`
+
+  There are no flags or options.
+
+  # Examples
+
+  \`\`\`sh
+  ./main.ts ~/repos/helix/book/src "turn off automatic bracket insertion"
+  \`\`\`
+`
 
 interface Doc {
   relPath: string
@@ -124,18 +141,26 @@ type ResponseMeta = { model: string; cost: number; timeMs: number }
 const meta = ({ model, cost, timeMs }: ResponseMeta) =>
   `\`${model}\` | ${moneyFmt.format(cost)} | ${timeFmt.format(timeMs / 1000)} s`
 
+async function bail(message?: string): Promise<never> {
+  let output = HELP
+  if (message) output = `⚠️ Error: ${message}\n\n---\n\n` + output
+  await renderMd(output)
+  Deno.exit(1)
+}
+
 /////////////////////////////
 // DO THE THING
 /////////////////////////////
 
 if (import.meta.main) {
   const args = parseArgs(Deno.args)
+  if (args.help || args.h) await bail()
 
   const [dir, ...qParts] = args._.map(String)
-  if (!dir) throw new Error('Please provide a directory path')
+  if (!dir) await bail('Please provide a directory path')
 
   const question = qParts.join(' ')
-  if (!question) throw new Error('Please provide a query')
+  if (!question) await bail('Please provide a question')
 
   const index = await getIndex(dir)
 
