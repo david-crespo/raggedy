@@ -49,7 +49,10 @@ const retrievalSystemPrompt = $.dedent`
   - Return at most 4 documents, but return fewer if possible. Avoid returning irrelevant documents!
   - Put more relevant documents first
   - Your response MUST be an array of relative paths
-  - The result must be parseable JSON. Do not wrap the answer in a markdown code block and do not attempt to answer the question.
+  - The result must be a parseable JSON array of strings
+    - Do NOT wrap the answer in a markdown code block
+    - Do NOT include any commentary or explanation
+    - Do NOT attempt to answer the question
 `
 
 const outlineXml = (doc: Doc) =>
@@ -72,14 +75,23 @@ async function retrieve(index: Doc[], question: string) {
       { text: retrievalSystemPrompt },
     ],
   )
-  const paths: string[] = JSON.parse(result.content)
-  // TODO: warn if there's a path returned that's not in the array
-  return {
-    ...result,
-    // 4 is the max system prompts cacheable in the Anthropic API
-    docs: paths.slice(0, 4)
-      .map((p) => index.find((doc) => doc.relPath === p))
-      .filter((x) => !!x),
+  // Sometimes the model includes text other than the array, so pull out the array
+  const match = result.content.match(/\[[^\]]*\]/)?.[0]
+  if (!match) throw new Error('Could not find JSON array in response: ' + result.content)
+
+  try {
+    const paths: string[] = JSON.parse(match)
+    // TODO: warn if there's a path returned that's not in the array
+    return {
+      ...result,
+      // 4 is the max system prompts cacheable in the Anthropic API
+      docs: paths.slice(0, 4)
+        .map((p) => index.find((doc) => doc.relPath === p))
+        .filter((x) => !!x),
+    }
+  } catch (e) {
+    console.error('Could not parse JSON', result.content)
+    throw e
   }
 }
 
