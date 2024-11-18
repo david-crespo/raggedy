@@ -167,10 +167,14 @@ if (import.meta.main) {
   let pb = $.progress('Finding relevant files...')
   const retrieved = await pb.with(() => retrieve(index, question))
 
-  const pathBullets = retrieved.docs.map((d) => `- \`${d.relPath}\``).join('\n')
-  renderMd(`# Relevant files\n\n${meta(retrieved)}\n\n${pathBullets}`)
+  const pathBullets = retrieved.docs.length > 0
+    ? retrieved.docs.map((d) => `- \`${d.relPath}\``).join('\n')
+    : 'No relevant documents found'
+  await renderMd(`# Relevant files\n\n${meta(retrieved)}\n\n${pathBullets}`)
+
+  if (retrieved.docs.length === 0) Deno.exit() // no need for second call
 
   pb = $.progress('Getting answer...')
   const answer = await pb.with(() => getAnswer(retrieved.docs, question))
-  renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
+  await renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
 }
