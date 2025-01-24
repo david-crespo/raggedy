@@ -38,7 +38,7 @@ function getIndex(dir: string): Promise<Doc[]> {
     const relPath = relative(dir, path)
     const headingPattern = path.endsWith('.adoc') ? /^=+\s+.*/gm : /^#+\s+.*/gm
     const headings = (content.match(headingPattern)?.map((h) => h.trim()) || []).join('\n')
-    const head = content.slice(0, 500)
+    const head = content.slice(0, 800)
     return { relPath, content, head, headings }
   })
 }
