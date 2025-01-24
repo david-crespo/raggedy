@@ -1,17 +1,21 @@
-import Anthropic from 'npm:@anthropic-ai/sdk@0.32.1'
+import Anthropic from 'npm:@anthropic-ai/sdk@0.36.2'
 
 const models = {
   haiku35: 'claude-3-5-haiku-20241022',
   sonnet: 'claude-3-5-sonnet-20241022',
 } as const
 
-type Model = typeof models[keyof typeof models]
+type Model = (typeof models)[keyof typeof models]
 
 type SystemMsg = { text: string; cache?: boolean }
 
-export async function askClaude(model: Model, userMsg: string, systemMsgs: SystemMsg[]) {
+export async function askClaude(
+  model: Model,
+  userMsg: string,
+  systemMsgs: SystemMsg[],
+) {
   const startTime = performance.now()
-  const response = await new Anthropic().beta.promptCaching.messages.create({
+  const response = await new Anthropic().beta.messages.create({
     model,
     system: systemMsgs.map(({ text, cache }) => ({
       type: 'text',
@@ -51,7 +55,7 @@ const prices = {
   },
 } as const
 
-type Usage = Anthropic.Beta.PromptCaching.Messages.PromptCachingBetaUsage
+type Usage = Anthropic.Beta.Messages.BetaUsage
 
 function getCost(model: Model, usage: Usage) {
   const { input, output, cacheRead, cacheWrite } = prices[model]
