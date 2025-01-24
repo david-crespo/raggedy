@@ -1,4 +1,5 @@
 import Anthropic from 'npm:@anthropic-ai/sdk@0.36.2'
+import type { Doc } from './types.ts'
 
 const models = {
   haiku35: 'claude-3-5-haiku-20241022',
@@ -13,24 +14,34 @@ export async function askClaude(
   model: Model,
   userMsg: string,
   systemMsgs: SystemMsg[],
+  documents: Doc[] = [],
 ) {
   const startTime = performance.now()
-  const response = await new Anthropic().beta.messages.create({
+  const response = await new Anthropic().messages.create({
     model,
     system: systemMsgs.map(({ text, cache }) => ({
       type: 'text',
       text,
       cache_control: cache ? { type: 'ephemeral' } : undefined,
     })),
-    messages: [{ role: 'user' as const, content: userMsg }],
+    messages: [{
+      role: 'user' as const,
+      content: [
+        ...documents.map(docToDoc),
+        { type: 'text', text: userMsg },
+      ],
+    }],
     max_tokens: 2048,
   })
   const timeMs = performance.now() - startTime
-  const content = response.content[0]
+  // we're not doing tool use, so we should always get text
+  const content = response.content
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('')
   return {
     model,
-    // we're not doing tool use so we should always get text
-    content: content.type === 'text' ? content.text : JSON.stringify(content),
+    content,
     cost: getCost(model, response.usage),
     timeMs,
   }
@@ -65,4 +76,19 @@ function getCost(model: Model, usage: Usage) {
     cacheRead * (usage.cache_read_input_tokens || 0) +
     cacheWrite * (usage.cache_creation_input_tokens || 0)
   )
+}
+
+function docToDoc(doc: Doc): Anthropic.Messages.DocumentBlockParam {
+  return {
+    type: 'document',
+    source: {
+      type: 'text',
+      media_type: 'text/plain',
+      data: doc.content,
+    },
+    context: doc.relPath,
+    cache_control: { type: 'ephemeral' },
+    // the citations are actually bad, but the document format is good!
+    // citations: { enabled: true },
+  }
 }

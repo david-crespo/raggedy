@@ -4,6 +4,7 @@ import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
 import $ from 'jsr:@david/dax@0.42.0'
 import { askClaude } from './llm.ts'
+import type { Doc } from './types.ts'
 
 const HELP = $.dedent`
   Answer a question based on a directory of Markdown or AsciiDoc files. Requires
@@ -23,13 +24,6 @@ const HELP = $.dedent`
   ./main.ts ~/repos/helix/book/src "turn off automatic bracket insertion"
   \`\`\`
 `
-
-interface Doc {
-  relPath: string
-  content: string
-  head: string
-  headings: string
-}
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -98,20 +92,13 @@ async function retrieve(index: Doc[], question: string) {
 const fullPromptSystemMsg = `
 Answer the user's question based on the above documentation.
 
+* Keep citations short and focused.
 * The documentation may be truncated, so do not assume it is comprehensive of the corpus or even all relevant documents in the corpus.
 * If you do not find the answer in the above sources, say so. You may speculate, but be clear that you are doing so.
 * Write naturally in prose. Do not overuse markdown headings and bullets.
 * Your answer must be in markdown format.
 * This is a one-time answer, not a chat, so don't prompt for followup questions
 `.trim()
-
-const fullDocXml = (doc: Doc) =>
-  $.dedent`
-    <document>
-      <path>${doc.relPath}</path>
-      <document_content>${doc.content}</document_content>
-    </document>
-  `
 
 /**
  * Pass the relevant docs to the LLM along with the question and get an answer.
@@ -120,12 +107,8 @@ const getAnswer = (relevantDocs: Doc[], question: string) =>
   askClaude(
     'claude-3-5-haiku-20241022',
     question,
-    [
-      // pass in relevant docs as separate system prompts so they can be cached
-      ...relevantDocs.map((doc) => ({ text: fullDocXml(doc), cache: true })),
-      // instructions at the end, per Anthropic API guidelines
-      { text: fullPromptSystemMsg },
-    ],
+    [{ text: fullPromptSystemMsg }],
+    relevantDocs,
   )
 
 /////////////////////////////
