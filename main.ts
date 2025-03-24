@@ -1,28 +1,10 @@
 #! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow
-import { parseArgs } from 'jsr:@std/cli@1.0/parse-args'
 import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
+import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
+
 import $ from 'jsr:@david/dax@0.42.0'
 import { askClaude, type Doc } from './llm.ts'
-
-const HELP = $.dedent`
-  Answer a question based on a directory of Markdown or AsciiDoc files. Requires
-  \`ANTHROPIC_API_KEY\` to be set.
-
-  # Usage
-
-  \`\`\`sh
-  ./main.ts <directory> <question>
-  \`\`\`
-
-  There are no flags or options.
-
-  # Examples
-
-  \`\`\`sh
-  ./main.ts ~/repos/helix/book/src "turn off automatic bracket insertion"
-  \`\`\`
-`
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -135,40 +117,34 @@ type ResponseMeta = { model: string; cost: number; timeMs: number }
 const meta = ({ model, cost, timeMs }: ResponseMeta) =>
   `\`${model}\` | ${moneyFmt.format(cost)} | ${timeFmt.format(timeMs / 1000)} s`
 
-async function bail(message?: string): Promise<never> {
-  let output = HELP
-  if (message) output = `⚠️ Error: ${message}\n\n---\n\n` + output
-  await renderMd(output)
-  Deno.exit(1)
-}
-
 /////////////////////////////
 // DO THE THING
 /////////////////////////////
 
-if (import.meta.main) {
-  const args = parseArgs(Deno.args)
-  if (args.help || args.h) await bail()
+await new Command()
+  .name('rgd')
+  .description(`LLM-only RAG Q&A based on a directory of text files`)
+  .example('', "rgd ~/repos/helix/docs/src 'turn off automatic bracket insertion'")
+  .helpOption('-h, --help', 'Show help')
+  .arguments('<directory> <...query>')
+  .action(async (_, dir, ...qParts) => {
+    const query = qParts.join(' ')
+    if (!query) throw new ValidationError('query is required')
+    const index = await getIndex(dir)
 
-  const [dir, ...qParts] = args._.map(String)
-  if (!dir) await bail('Please provide a directory path')
+    const retrieved = await $.progress('Finding relevant files...')
+      .with(() => retrieve(index, query))
 
-  const question = qParts.join(' ')
-  if (!question) await bail('Please provide a question')
+    const pathBullets = retrieved.docs.length > 0
+      ? retrieved.docs.map((d) => `- \`${d.relPath}\``).join('\n')
+      : 'No relevant documents found'
+    await renderMd(`# Relevant files\n\n${meta(retrieved)}\n\n${pathBullets}`)
 
-  const index = await getIndex(dir)
+    if (retrieved.docs.length === 0) Deno.exit() // no need for second call
 
-  let pb = $.progress('Finding relevant files...')
-  const retrieved = await pb.with(() => retrieve(index, question))
+    const answer = await $.progress('Getting answer...')
+      .with(() => getAnswer(retrieved.docs, query))
 
-  const pathBullets = retrieved.docs.length > 0
-    ? retrieved.docs.map((d) => `- \`${d.relPath}\``).join('\n')
-    : 'No relevant documents found'
-  await renderMd(`# Relevant files\n\n${meta(retrieved)}\n\n${pathBullets}`)
-
-  if (retrieved.docs.length === 0) Deno.exit() // no need for second call
-
-  pb = $.progress('Getting answer...')
-  const answer = await pb.with(() => getAnswer(retrieved.docs, question))
-  await renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
-}
+    await renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
+  })
+  .parse(Deno.args)
