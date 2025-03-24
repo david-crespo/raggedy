@@ -1,5 +1,11 @@
 import Anthropic from 'npm:@anthropic-ai/sdk@0.39.0'
-import type { Doc } from './types.ts'
+
+export interface Doc {
+  relPath: string
+  content: string
+  head: string
+  headings: string
+}
 
 const models = {
   haiku35: 'claude-3-5-haiku-20241022',

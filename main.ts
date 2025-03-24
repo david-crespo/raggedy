@@ -3,8 +3,7 @@ import { parseArgs } from 'jsr:@std/cli@1.0/parse-args'
 import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
 import $ from 'jsr:@david/dax@0.42.0'
-import { askClaude } from './llm.ts'
-import type { Doc } from './types.ts'
+import { askClaude, type Doc } from './llm.ts'
 
 const HELP = $.dedent`
   Answer a question based on a directory of Markdown or AsciiDoc files. Requires
