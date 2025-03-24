@@ -1,9 +1,9 @@
-import Anthropic from 'npm:@anthropic-ai/sdk@0.36.2'
+import Anthropic from 'npm:@anthropic-ai/sdk@0.39.0'
 import type { Doc } from './types.ts'
 
 const models = {
   haiku35: 'claude-3-5-haiku-20241022',
-  sonnet: 'claude-3-5-sonnet-20241022',
+  sonnet: 'claude-3-7-sonnet-20250219',
 } as const
 
 type Model = (typeof models)[keyof typeof models]
@@ -58,7 +58,7 @@ const prices = {
     cacheRead: 0.1 / M,
     cacheWrite: 1.25 / M,
   },
-  'claude-3-5-sonnet-20241022': {
+  'claude-3-7-sonnet-20250219': {
     input: 3 / M,
     output: 15 / M,
     cacheRead: 0.3 / M,

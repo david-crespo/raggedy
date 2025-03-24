@@ -90,9 +90,9 @@ async function retrieve(index: Doc[], question: string) {
 }
 
 const fullPromptSystemMsg = `
-Answer the user's question based on the above documentation.
+Answer the user's question concisely based on the above documentation.
 
-* Keep citations short and focused.
+* Give a focused answer. The user can look up more detail if necessary.
 * The documentation may be truncated, so do not assume it is comprehensive of the corpus or even all relevant documents in the corpus.
 * If you do not find the answer in the above sources, say so. You may speculate, but be clear that you are doing so.
 * Write naturally in prose. Do not overuse markdown headings and bullets.
