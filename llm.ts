@@ -35,7 +35,7 @@ export async function askClaude(
           source: { type: 'text', media_type: 'text/plain', data: doc.content },
           context: doc.relPath,
           cache_control: { type: 'ephemeral' },
-          // the citations are actually bad, but the document format is good!
+          // the citations are hard to use, but the document format is good!
           // citations: { enabled: true },
         } as const)),
         { type: 'text', text: userMsg },
@@ -51,13 +51,25 @@ export async function askClaude(
     .map((c) => c.text)
     .join('')
 
-  const cost = getCost(model, response.usage)
-  const { cache_read_input_tokens, input_tokens, output_tokens } = response.usage
+  const usage = response.usage
+  const cost = getCost(model, usage)
+
+  let tokens = `**Tokens:** ${usage.input_tokens}`
+  const parts: string[] = []
+  if (usage.cache_read_input_tokens) {
+    parts.push('**R:** ' + usage.cache_read_input_tokens)
+  }
+  if (usage.cache_creation_input_tokens) {
+    parts.push('**W:** ' + usage.cache_creation_input_tokens)
+  }
+  if (parts.length > 0) tokens += ` (${parts.join(', ')})`
+
+  tokens += ` -> ${usage.output_tokens}`
   const meta = [
     `\`${model}\``,
     moneyFmt.format(cost),
     timeFmt.format(timeMs / 1000) + ' s',
-    `**Tokens:** ${input_tokens} (${cache_read_input_tokens}) -> ${output_tokens}`,
+    tokens,
   ].join(' | ')
 
   return { content, meta }
