@@ -57,14 +57,12 @@ async function retrieve(index: Doc[], question: string) {
 
   try {
     const paths: string[] = JSON.parse(match)
-    // TODO: warn if there's a path returned that's not in the array
-    return {
-      ...result,
-      // 4 is the max system prompts cacheable in the Anthropic API
-      docs: paths.slice(0, 4)
-        .map((p) => index.find((doc) => doc.relPath === p))
-        .filter((x) => !!x),
-    }
+    // 4 is the max system prompts cacheable in the Anthropic API
+    const docs = paths.slice(0, 4)
+      .map((p) => index.find((doc) => doc.relPath === p))
+      // TODO: warn if there's a path returned that's not in the array
+      .filter((x) => !!x)
+    return { ...result, docs }
   } catch (e) {
     console.error('Could not parse JSON', result.content)
     throw e
