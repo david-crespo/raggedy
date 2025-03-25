@@ -1,10 +1,11 @@
 #! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow
+
 import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
 import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
-
 import $ from 'jsr:@david/dax@0.42.0'
-import { askClaude, type Doc } from './llm.ts'
+
+import { askClaude, type Doc, models } from './llm.ts'
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -43,7 +44,7 @@ const outlineXml = (doc: Doc) =>
  */
 async function retrieve(index: Doc[], question: string) {
   const result = await askClaude(
-    'claude-3-5-haiku-20241022',
+    models.haiku35,
     `<question>${question}</question>`,
     [
       { text: index.map(outlineXml).join('\n'), cache: true },
@@ -85,12 +86,7 @@ Answer the user's question concisely based on the above documentation.
  * Pass the relevant docs to the LLM along with the question and get an answer.
  */
 const getAnswer = (relevantDocs: Doc[], question: string) =>
-  askClaude(
-    'claude-3-5-haiku-20241022',
-    question,
-    [{ text: fullPromptSystemMsg }],
-    relevantDocs,
-  )
+  askClaude(models.haiku35, question, [{ text: fullPromptSystemMsg }], relevantDocs)
 
 /////////////////////////////
 // DISPLAY HELPERS
@@ -130,21 +126,20 @@ await new Command()
   .action(async (_, dir, ...qParts) => {
     const query = qParts.join(' ')
     if (!query) throw new ValidationError('query is required')
+
     const index = await getIndex(dir)
 
     const retrieved = await $.progress('Finding relevant files...')
       .with(() => retrieve(index, query))
-
-    const pathBullets = retrieved.docs.length > 0
-      ? retrieved.docs.map((d) => `- \`${d.relPath}\``).join('\n')
+    const sources = retrieved.docs.length > 0
+      ? retrieved.docs.map((d) => `- ${d.relPath}`).join('\n')
       : 'No relevant documents found'
-    await renderMd(`# Relevant files\n\n${meta(retrieved)}\n\n${pathBullets}`)
+    await renderMd(['# Relevant files', meta(retrieved), sources].join('\n\n'))
 
-    if (retrieved.docs.length === 0) Deno.exit() // no need for second call
+    if (retrieved.docs.length === 0) return // no need for second call
 
     const answer = await $.progress('Getting answer...')
       .with(() => getAnswer(retrieved.docs, query))
-
     await renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
   })
   .parse(Deno.args)

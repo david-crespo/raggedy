@@ -7,7 +7,7 @@ export interface Doc {
   headings: string
 }
 
-const models = {
+export const models = {
   haiku35: 'claude-3-5-haiku-20241022',
   sonnet: 'claude-3-7-sonnet-20250219',
 } as const
