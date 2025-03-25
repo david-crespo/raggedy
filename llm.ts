@@ -7,12 +7,7 @@ export interface Doc {
   headings: string
 }
 
-export const models = {
-  haiku35: 'claude-3-5-haiku-20241022',
-  sonnet: 'claude-3-7-sonnet-20250219',
-} as const
-
-type Model = (typeof models)[keyof typeof models]
+type Model = '3.5-haiku' | '3.7-sonnet'
 
 type SystemMsg = { text: string; cache?: boolean }
 
@@ -24,7 +19,9 @@ export async function askClaude(
 ) {
   const startTime = performance.now()
   const response = await new Anthropic().messages.create({
-    model,
+    model: model === '3.5-haiku'
+      ? 'claude-3-5-haiku-20241022'
+      : 'claude-3-7-sonnet-20250219',
     system: systemMsgs.map(({ text, cache }) => ({
       type: 'text',
       text,
@@ -45,11 +42,16 @@ export async function askClaude(
     .filter((c) => c.type === 'text')
     .map((c) => c.text)
     .join('')
+  const cost = getCost(model, response.usage)
+  const { cache_read_input_tokens, input_tokens, output_tokens } = response.usage
   return {
-    model,
     content,
-    cost: getCost(model, response.usage),
-    timeMs,
+    meta: [
+      `\`${model}\``,
+      moneyFmt.format(cost),
+      timeFmt.format(timeMs / 1000) + ' s',
+      `**Tokens:** ${input_tokens} (${cache_read_input_tokens}) -> ${output_tokens}`,
+    ].join(' | '),
   }
 }
 
@@ -58,13 +60,13 @@ export async function askClaude(
 const M = 1_000_000
 
 const prices = {
-  'claude-3-5-haiku-20241022': {
+  '3.5-haiku': {
     input: 1 / M,
     output: 5 / M,
     cacheRead: 0.1 / M,
     cacheWrite: 1.25 / M,
   },
-  'claude-3-7-sonnet-20250219': {
+  '3.7-sonnet': {
     input: 3 / M,
     output: 15 / M,
     cacheRead: 0.3 / M,
@@ -98,3 +100,11 @@ function docToDoc(doc: Doc): Anthropic.Messages.DocumentBlockParam {
     // citations: { enabled: true },
   }
 }
+
+const moneyFmt = Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 5,
+})
+
+const timeFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })

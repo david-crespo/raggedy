@@ -5,7 +5,7 @@ import { walk } from 'jsr:@std/fs@1.0/walk'
 import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
 import $ from 'jsr:@david/dax@0.42.0'
 
-import { askClaude, type Doc, models } from './llm.ts'
+import { askClaude, type Doc } from './llm.ts'
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -44,7 +44,7 @@ const outlineXml = (doc: Doc) =>
  */
 async function retrieve(index: Doc[], question: string) {
   const result = await askClaude(
-    models.haiku35,
+    '3.5-haiku',
     `<question>${question}</question>`,
     [
       { text: index.map(outlineXml).join('\n'), cache: true },
@@ -86,7 +86,7 @@ Answer the user's question concisely based on the above documentation.
  * Pass the relevant docs to the LLM along with the question and get an answer.
  */
 const getAnswer = (relevantDocs: Doc[], question: string) =>
-  askClaude(models.haiku35, question, [{ text: fullPromptSystemMsg }], relevantDocs)
+  askClaude('3.5-haiku', question, [{ text: fullPromptSystemMsg }], relevantDocs)
 
 /////////////////////////////
 // DISPLAY HELPERS
@@ -100,18 +100,6 @@ async function renderMd(md: string, raw = false) {
     console.log(md)
   }
 }
-
-const moneyFmt = Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 5,
-})
-
-const timeFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
-
-type ResponseMeta = { model: string; cost: number; timeMs: number }
-const meta = ({ model, cost, timeMs }: ResponseMeta) =>
-  `\`${model}\` | ${moneyFmt.format(cost)} | ${timeFmt.format(timeMs / 1000)} s`
 
 /////////////////////////////
 // DO THE THING
@@ -134,12 +122,12 @@ await new Command()
     const sources = retrieved.docs.length > 0
       ? retrieved.docs.map((d) => `- ${d.relPath}`).join('\n')
       : 'No relevant documents found'
-    await renderMd(['# Relevant files', meta(retrieved), sources].join('\n\n'))
+    await renderMd(['# Relevant files', retrieved.meta, sources].join('\n\n'))
 
     if (retrieved.docs.length === 0) return // no need for second call
 
     const answer = await $.progress('Getting answer...')
       .with(() => getAnswer(retrieved.docs, query))
-    await renderMd(`# Answer\n\n${meta(answer)}\n\n${answer.content}`)
+    await renderMd(['# Answer', answer.meta, answer.content].join('\n\n'))
   })
   .parse(Deno.args)
