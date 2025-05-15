@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/0f27bd02-7d03-41f0-b3a4-48fe17dd5495
 - [Deno](https://docs.deno.com/runtime/manual) (required)
 - [`glow`](https://github.com/charmbracelet/glow) (terminal markdown renderer)
   - If `glow` is not present, the script will just `console.log` raw markdown to the terminal
-- Anthropic API key in `ANTHROPIC_API_KEY`
+- Gemini API key in `GEMINI_API_KEY`
 
 ### Installation
 
@@ -23,9 +23,9 @@ https://github.com/user-attachments/assets/0f27bd02-7d03-41f0-b3a4-48fe17dd5495
 1. `chmod +x main.ts` so it's executable
 
 At this point you just need some way of executing the script with
-`ANTHROPIC_API_KEY` set. The way I do this is a bash script at
+`GEMINI_API_KEY` set. The way I do this is a bash script at
 `~/.local/bin/rgd` that looks like this, where `.llm-env` contains
-lines that look like `export ANTHROPIC_API_KEY=xxxxx`.
+lines that look like `export GEMINI_API_KEY=xxxxx`.
 
 ```sh
 #!/bin/bash

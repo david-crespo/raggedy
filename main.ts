@@ -5,7 +5,7 @@ import { walk } from 'jsr:@std/fs@1.0/walk'
 import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
 import $ from 'jsr:@david/dax@0.42.0'
 
-import { askClaude, type Doc } from './llm.ts'
+import { askGemini, type Doc } from './llm.ts'
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -20,13 +20,12 @@ function getIndex(dir: string): Promise<Doc[]> {
 }
 
 const retrievalSystemPrompt = $.dedent`
-  You must determine which documents are likely to be relevant to the user's question.
+  You are a document retrieval system. Determine which of the provided documents are likely to be relevant to the user's question.
 
   - Return at most 4 documents, but return fewer if possible. Avoid returning irrelevant documents!
-  - Put more relevant documents first
-  - Your response MUST be an array of relative paths
-  - The result must be a parseable JSON array of strings
-    - Do NOT wrap the answer in a markdown code block
+  - Put most relevant documents first
+  - Your response MUST be a parseable JSON array of relative paths
+    - Do NOT wrap the answer in a markdown code fence
     - Do NOT include any commentary or explanation
     - Do NOT attempt to answer the question
 `
@@ -43,13 +42,9 @@ const outlineXml = (doc: Doc) =>
  * Determine which subset of the documents is relevant to the question.
  */
 async function retrieve(index: Doc[], question: string) {
-  const result = await askClaude(
-    '3.5-haiku',
+  const result = await askGemini(
     `<question>${question}</question>`,
-    [
-      { text: index.map(outlineXml).join('\n'), cache: true },
-      { text: retrievalSystemPrompt },
-    ],
+    [index.map(outlineXml).join('\n'), retrievalSystemPrompt],
   )
   // Sometimes the model includes text other than the array, so pull out the array
   const match = result.content.match(/\[[^\]]*\]/)?.[0]
@@ -84,7 +79,7 @@ Answer the user's question concisely based on the above documentation.
  * Pass the relevant docs to the LLM along with the question and get an answer.
  */
 const getAnswer = (relevantDocs: Doc[], question: string) =>
-  askClaude('3.5-haiku', question, [{ text: fullPromptSystemMsg }], relevantDocs)
+  askGemini(question, [fullPromptSystemMsg], relevantDocs)
 
 /////////////////////////////
 // DISPLAY HELPERS
