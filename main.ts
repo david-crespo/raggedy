@@ -4,6 +4,7 @@ import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
 import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
 import $ from 'jsr:@david/dax@0.42.0'
+import * as R from 'npm:remeda@2.22.1'
 
 import { askGemini, type Doc } from './llm.ts'
 
@@ -64,22 +65,21 @@ async function retrieve(index: Doc[], question: string) {
   }
 }
 
-const fullPromptSystemMsg = `
+const systemMsgBase = `
 Answer the user's question concisely based on the above documentation.
 
 * Give a focused answer. The user can look up more detail if necessary.
-* The documentation may be truncated, so do not assume it is comprehensive of the corpus or even all relevant documents in the corpus.
 * If you do not find the answer in the above sources, say so. You may speculate, but be clear that you are doing so.
 * Write naturally in prose. Do not overuse markdown headings and bullets.
 * Your answer must be in markdown format.
 * This is a one-time answer, not a chat, so don't prompt for followup questions
 `.trim()
 
-/**
- * Pass the relevant docs to the LLM along with the question and get an answer.
- */
-const getAnswer = (relevantDocs: Doc[], question: string) =>
-  askGemini(question, [fullPromptSystemMsg], relevantDocs)
+const answerSystemMsg = systemMsgBase + `
+* The documentation may be truncated, so do not assume it is comprehensive of the corpus or even all relevant documents in the corpus.`
+
+const allDocsAnswerSystemMsg = systemMsgBase + `
+* You have access to the complete documentation corpus, so you can provide comprehensive answers.`
 
 /////////////////////////////
 // DISPLAY HELPERS
@@ -98,10 +98,15 @@ async function renderMd(md: string, raw = false) {
 // DO THE THING
 /////////////////////////////
 
+// if docs are shorter than this, don't bother narrowing
+const THRESHOLD = 500_000
+
+const numFmt = Intl.NumberFormat()
+
 await new Command()
   .name('rgd')
   .description(`LLM-only RAG Q&A based on a directory of text files`)
-  .example('', "rgd ~/repos/helix/docs/src 'turn off automatic bracket insertion'")
+  .example('', "rgd ~/repos/helix/book/src 'turn off automatic bracket insertion'")
   .helpOption('-h, --help', 'Show help')
   .arguments('<directory> <...query>')
   .action(async (_, dir, ...qParts) => {
@@ -110,6 +115,19 @@ await new Command()
 
     const index = await getIndex(dir)
 
+    const totalDocsLength = R.sumBy(index, (doc) => doc.content.length)
+
+    if (totalDocsLength <= THRESHOLD) {
+      // Skip retrieval and use all docs
+      const len = numFmt.format(totalDocsLength)
+      await renderMd(`Using full corpus (length: ${len} < ${numFmt.format(THRESHOLD)})`)
+      const answer = await $.progress('Getting answer...')
+        .with(() => askGemini(query, [allDocsAnswerSystemMsg], index))
+      await renderMd(['# Answer', answer.meta, answer.content].join('\n\n'))
+      return
+    }
+
+    // Use normal retrieval process
     const retrieved = await $.progress('Finding relevant files...')
       .with(() => retrieve(index, query))
     const sources = retrieved.docs.length > 0
@@ -120,7 +138,7 @@ await new Command()
     if (retrieved.docs.length === 0) return // no need for second call
 
     const answer = await $.progress('Getting answer...')
-      .with(() => getAnswer(retrieved.docs, query))
+      .with(() => askGemini(query, [answerSystemMsg], retrieved.docs))
     await renderMd(['# Answer', answer.meta, answer.content].join('\n\n'))
   })
   .parse(Deno.args)

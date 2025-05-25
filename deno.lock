@@ -20,7 +20,8 @@
     "jsr:@std/path@^1.0.8": "1.0.8",
     "jsr:@std/streams@0.221": "0.221.0",
     "jsr:@std/text@~1.0.7": "1.0.12",
-    "npm:@google/genai@0.14.0": "0.14.0_zod@3.24.4"
+    "npm:@google/genai@0.14.0": "0.14.0_zod@3.24.4",
+    "npm:remeda@2.22.1": "2.22.1"
   },
   "jsr": {
     "@cliffy/command@1.0.0-rc.7": {
@@ -438,6 +439,12 @@
         "once"
       ]
     },
+    "remeda@2.22.1": {
+      "integrity": "sha512-7bcggqt1D7sEmkpzuGowcsAfkO5Ae03+HFt6zA+AfJ/r5+wVJMq8DEHBAitbKWsdyeUX7qqjfi/jnH9HmdU3uA==",
+      "dependencies": [
+        "type-fest"
+      ]
+    },
     "safe-buffer@5.2.1": {
       "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ=="
     },
@@ -463,6 +470,9 @@
     },
     "tr46@0.0.3": {
       "integrity": "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw=="
+    },
+    "type-fest@4.41.0": {
+      "integrity": "sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA=="
     },
     "undici-types@6.20.0": {
       "integrity": "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="
