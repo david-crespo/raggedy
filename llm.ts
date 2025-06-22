@@ -26,7 +26,7 @@ export async function askGemini(
       thinkingConfig: { thinkingBudget: 0 },
       systemInstruction: systemMsgs.join('\n\n'),
     },
-    model: 'gemini-2.5-flash-preview-05-20',
+    model: 'gemini-2.5-flash',
     contents: [
       ...docs.map((doc) => `<document>${doc.content}</document>`),
       userMsg,
@@ -40,9 +40,9 @@ export async function askGemini(
     input_cache_hit: result.usageMetadata!.cachedContentTokenCount || 0,
   }
 
-  const cost = (0.15 * (usage.input - usage.input_cache_hit) / M) +
-    (0.60 * usage.output / M) +
-    (0.0375 * usage.input_cache_hit / M)
+  const cost = (0.30 * (usage.input - usage.input_cache_hit) / M) +
+    (2.5 * usage.output / M) +
+    (0.075 * usage.input_cache_hit / M)
 
   const content = result.candidates?.[0].content?.parts?.map((p) => p.text).join('\n\n')!
 
