@@ -1,4 +1,4 @@
-#! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow
+#! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow,ai
 
 import { relative } from 'jsr:@std/path@1.0'
 import { walk } from 'jsr:@std/fs@1.0/walk'
@@ -6,7 +6,12 @@ import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
 import $ from 'jsr:@david/dax@0.42.0'
 import * as R from 'npm:remeda@2.22.1'
 
-import { askGemini, type Doc } from './llm.ts'
+export interface Doc {
+  relPath: string
+  content: string
+  head: string
+  headings: string
+}
 
 function getIndex(dir: string): Promise<Doc[]> {
   const files = walk(dir, { includeDirs: false, exts: ['md', 'adoc'] })
@@ -42,14 +47,17 @@ const outlineXml = (doc: Doc) =>
 /**
  * Determine which subset of the documents is relevant to the question.
  */
-async function retrieve(index: Doc[], question: string) {
-  const result = await askGemini(
-    `<question>${question}</question>`,
-    [index.map(outlineXml).join('\n'), retrievalSystemPrompt],
-  )
+async function retrieve(index: Doc[], question: string, model: string) {
+  const docsXml = index.map(outlineXml).join('\n')
+  const systemPrompt = `${retrievalSystemPrompt}\n\n${docsXml}`
+  const result = await $`ai -m ${model} -s ${systemPrompt} ${question}`.text()
+
+  // TODO: render narrowing result so we can see the price
+  // await renderMd(['# Narrowing response', result].join('\n\n'))
+
   // Sometimes the model includes text other than the array, so pull out the array
-  const match = result.content.match(/\[[^\]]*\]/)?.[0]
-  if (!match) throw new Error('Could not find JSON array in response: ' + result.content)
+  const match = result.match(/\[[^\]]*\]/)?.[0]
+  if (!match) throw new Error('Could not find JSON array in response: ' + result)
 
   try {
     const paths: string[] = JSON.parse(match)
@@ -58,9 +66,9 @@ async function retrieve(index: Doc[], question: string) {
       .map((p) => index.find((doc) => doc.relPath === p))
       // TODO: warn if there's a path returned that's not in the array
       .filter((x) => !!x)
-    return { ...result, docs }
+    return { content: result, docs, meta: '' }
   } catch (e) {
-    console.error('Could not parse JSON', result.content)
+    console.error('Could not parse JSON', result)
     throw e
   }
 }
@@ -108,8 +116,9 @@ await new Command()
   .description(`LLM-only RAG Q&A based on a directory of text files`)
   .example('', "rgd ~/repos/helix/book/src 'turn off automatic bracket insertion'")
   .helpOption('-h, --help', 'Show help')
+  .option('-m, --model <model>', 'Model to use', { default: 'flash' })
   .arguments('<directory> <...query>')
-  .action(async (_, dir, ...qParts) => {
+  .action(async ({ model }, dir, ...qParts) => {
     const query = qParts.join(' ')
     if (!query) throw new ValidationError('query is required')
 
@@ -120,25 +129,30 @@ await new Command()
     if (totalDocsLength <= THRESHOLD) {
       // Skip retrieval and use all docs
       const len = numFmt.format(totalDocsLength)
-      await renderMd(`Using full corpus (length: ${len} < ${numFmt.format(THRESHOLD)})`)
-      const answer = await $.progress('Getting answer...')
-        .with(() => askGemini(query, [allDocsAnswerSystemMsg], index))
-      await renderMd(['# Answer', answer.meta, answer.content].join('\n\n'))
+      await renderMd(
+        `Using full corpus (length in chars: ${len} < ${numFmt.format(THRESHOLD)})`,
+      )
+      const docsContent = index.map((doc) => `<document>${doc.content}</document>`).join(
+        '\n',
+      )
+      const systemPrompt = `${allDocsAnswerSystemMsg}\n\n${docsContent}`
+      await $`ai -m ${model} -s ${systemPrompt} ${query}`
       return
     }
 
     // Use normal retrieval process
     const retrieved = await $.progress('Finding relevant files...')
-      .with(() => retrieve(index, query))
+      .with(() => retrieve(index, query, model))
     const sources = retrieved.docs.length > 0
       ? retrieved.docs.map((d) => `- ${d.relPath}`).join('\n')
       : 'No relevant documents found'
-    await renderMd(['# Relevant files', retrieved.meta, sources].join('\n\n'))
+    await renderMd(['# Relevant files', sources].join('\n\n'))
 
     if (retrieved.docs.length === 0) return // no need for second call
 
-    const answer = await $.progress('Getting answer...')
-      .with(() => askGemini(query, [answerSystemMsg], retrieved.docs))
-    await renderMd(['# Answer', answer.meta, answer.content].join('\n\n'))
+    const docsContent = retrieved.docs.map((doc) => `<document>${doc.content}</document>`)
+      .join('\n')
+    const prompt = `${query}\n\n${docsContent}`
+    await $`ai -m ${model} -s ${answerSystemMsg} ${prompt}`
   })
   .parse(Deno.args)
