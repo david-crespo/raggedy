@@ -80,8 +80,37 @@ async function renderMd(md: string, raw = false) {
 // QUERY PROCESSING
 /////////////////////////////
 
+const moneyFmt = Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 5,
+})
+
+const pricing: Record<
+  string,
+  { input: number; output: number; cacheWrite: number; cacheRead: number }
+> = {
+  'claude-haiku-4-5-20251001': {
+    input: 1.00,
+    output: 5.00,
+    cacheWrite: 1.25,
+    cacheRead: 0.10,
+  },
+  'claude-3-5-sonnet-20241022': {
+    input: 3.00,
+    output: 15.00,
+    cacheWrite: 3.75,
+    cacheRead: 0.30,
+  },
+}
+
 async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
   let finalAnswer = ''
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+  let cacheCreationTokens = 0
+  let cacheReadTokens = 0
 
   for await (
     const event of query({
@@ -99,6 +128,22 @@ async function runQuery(prompt: string, model: string, targetDir: string): Promi
       if ('result' in event) {
         finalAnswer = event.result
       }
+    }
+
+    // Track usage
+    if ('usage' in event && event.usage) {
+      const usage = event.usage as {
+        input_tokens?: number
+        output_tokens?: number
+        cache_creation_input_tokens?: number
+        cache_read_input_tokens?: number
+      }
+      if (usage.input_tokens) totalInputTokens += usage.input_tokens
+      if (usage.output_tokens) totalOutputTokens += usage.output_tokens
+      if (usage.cache_creation_input_tokens) {
+        cacheCreationTokens += usage.cache_creation_input_tokens
+      }
+      if (usage.cache_read_input_tokens) cacheReadTokens += usage.cache_read_input_tokens
     }
 
     if (event.type === 'assistant') {
@@ -188,6 +233,36 @@ async function runQuery(prompt: string, model: string, targetDir: string): Promi
     }
   }
 
+  // Display usage summary
+  if (
+    totalInputTokens > 0 || totalOutputTokens > 0 || cacheCreationTokens > 0 ||
+    cacheReadTokens > 0
+  ) {
+    const totalTokens = totalInputTokens + totalOutputTokens + cacheCreationTokens +
+      cacheReadTokens
+
+    const modelId = resolveModel(model)
+    const prices = pricing[modelId] ||
+      { input: 3.00, output: 15.00, cacheWrite: 3.75, cacheRead: 0.30 }
+
+    const inputCost = (totalInputTokens / 1_000_000) * prices.input
+    const outputCost = (totalOutputTokens / 1_000_000) * prices.output
+    const cacheWriteCost = (cacheCreationTokens / 1_000_000) * prices.cacheWrite
+    const cacheReadCost = (cacheReadTokens / 1_000_000) * prices.cacheRead
+    const totalCost = inputCost + outputCost + cacheWriteCost + cacheReadCost
+
+    const parts = [
+      `${totalInputTokens} in`,
+      `${totalOutputTokens} out`,
+      `${cacheCreationTokens} cache write`,
+      `${cacheReadTokens} cache read`,
+    ]
+
+    console.log()
+    console.log(`Tokens: ${totalTokens} = ${parts.join(' + ')}`)
+    console.log(`Cost:   ${moneyFmt.format(totalCost)}`)
+  }
+
   return finalAnswer
 }
 
@@ -216,10 +291,11 @@ await new Command()
       makeSystemPrompt(targetDir)
     }\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
 
-    const finalAnswer = await runQuery(prompt, model, targetDir)
+    const answer = await runQuery(prompt, model, targetDir)
 
-    if (finalAnswer) {
-      await renderMd(finalAnswer)
-    }
+    // TODO: get something more like this and render it with in the `renderMd`
+    // `sonnet-4.5`  | 8.6 s | $0.00588 | Tokens: 371 -> 318
+
+    await renderMd('---\n\n' + answer)
   })
   .parse(Deno.args)
