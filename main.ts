@@ -80,13 +80,18 @@ async function renderMd(md: string, raw = false) {
 // QUERY PROCESSING
 /////////////////////////////
 
-async function runQuery(prompt: string, model: string): Promise<string> {
+async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
   let finalAnswer = ''
 
   for await (
     const event of query({
       prompt,
-      options: { model: resolveModel(model), executable: 'bun' },
+      options: {
+        model: resolveModel(model),
+        executable: 'bun',
+        // without this it doesn't have permissions to read anything
+        additionalDirectories: [targetDir],
+      },
     })
   ) {
     if (event.type === 'result') {
@@ -101,7 +106,9 @@ async function runQuery(prompt: string, model: string): Promise<string> {
       if ('message' in event) {
         const msg = event.message
         if (msg && typeof msg === 'object' && 'content' in msg) {
-          const content = msg.content as Array<{ type: string; name?: string; input?: unknown; text?: string }>
+          const content = msg.content as Array<
+            { type: string; name?: string; input?: unknown; text?: string }
+          >
           const textContent = content.find((c) => c.type === 'text')
           if (textContent?.text) {
             finalAnswer = textContent.text
@@ -115,7 +122,9 @@ async function runQuery(prompt: string, model: string): Promise<string> {
               let details = ''
 
               if (tool.name === 'Grep') {
-                details = ` pattern="${input.pattern}" glob="${input.glob || '*'}"${input['-i'] ? ' case-insensitive' : ''}`
+                details = ` pattern="${input.pattern}" glob="${input.glob || '*'}"${
+                  input['-i'] ? ' case-insensitive' : ''
+                }`
               } else if (tool.name === 'Read') {
                 const filePath = input.file_path as string
                 details = ` ${filePath.split('/').pop()}`
@@ -126,7 +135,7 @@ async function runQuery(prompt: string, model: string): Promise<string> {
                 details = ` ${cmd}`
               }
 
-              console.log(`→ ${tool.name}${details}`)
+              console.log(`${tool.name}${details}`)
             }
           }
         }
@@ -138,11 +147,41 @@ async function runQuery(prompt: string, model: string): Promise<string> {
       if ('message' in event) {
         const msg = event.message
         if (msg && typeof msg === 'object' && 'content' in msg) {
-          const content = msg.content as Array<{ type: string; content?: string; tool_use_id?: string }>
+          const content = msg.content as Array<{
+            type: string
+            content?: string | Array<{ type: string; text?: string }>
+            tool_use_id?: string
+            is_error?: boolean
+          }>
           const toolResults = content.filter((c) => c.type === 'tool_result')
           for (const result of toolResults) {
-            const preview = result.content?.split('\n')[0]?.substring(0, 60) || '(empty)'
-            console.log(`  ← ${preview}`)
+            let preview = '(empty)'
+            if (result.content) {
+              if (typeof result.content === 'string') {
+                preview = result.content.split('\n')[0]?.substring(0, 60)
+              } else if (Array.isArray(result.content)) {
+                const textBlock = result.content.find((c) => c.type === 'text')
+                preview = textBlock?.text?.split('\n')[0]?.substring(0, 60) || '(empty)'
+              }
+            }
+
+            // Show full error messages
+            if (
+              result.is_error || preview.includes('error') || preview.includes('permission')
+            ) {
+              if (typeof result.content === 'string') {
+                console.log(`  ← ERROR: ${result.content}`)
+              } else if (Array.isArray(result.content)) {
+                const textBlock = result.content.find((c) => c.type === 'text')
+                if (textBlock?.text) {
+                  console.log(`  ← ERROR: ${textBlock.text}`)
+                }
+              } else {
+                console.log(`  ${preview}`)
+              }
+            } else {
+              console.log(`  ${preview}`)
+            }
           }
         }
       }
@@ -173,10 +212,11 @@ await new Command()
     const index = await getIndex(targetDir)
     const indexXml = index.map((doc) => outlineXml(doc, targetDir)).join('\n')
 
-    const prompt =
-      `${makeSystemPrompt(targetDir)}\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
+    const prompt = `${
+      makeSystemPrompt(targetDir)
+    }\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
 
-    const finalAnswer = await runQuery(prompt, model)
+    const finalAnswer = await runQuery(prompt, model, targetDir)
 
     if (finalAnswer) {
       await renderMd(finalAnswer)
