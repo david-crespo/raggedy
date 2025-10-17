@@ -1,6 +1,6 @@
 #! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow,bun
 
-import { relative } from '@std/path'
+import { relative, resolve } from '@std/path'
 import { walk } from '@std/fs/walk'
 import { Command, ValidationError } from '@cliffy/command'
 import $ from '@david/dax'
@@ -25,10 +25,11 @@ function getIndex(dir: string): Promise<Doc[]> {
   })
 }
 
-const outlineXml = (doc: Doc) =>
+const outlineXml = (doc: Doc, baseDir: string) =>
   $.dedent`
     <document>
       <path>${doc.relPath}</path>
+      <fullPath>${resolve(baseDir, doc.relPath)}</fullPath>
       <sections>${doc.headings}</sections>
       <head>${doc.head}</head>
     </document>`
@@ -42,12 +43,15 @@ function resolveModel(modelInput: string): string {
   return modelMap[modelInput.toLowerCase()] || modelInput
 }
 
-const systemPrompt = $.dedent`
+function makeSystemPrompt(targetDir: string) {
+  return $.dedent`
   You are a documentation assistant. Answer the user's question based on the documentation corpus.
+
+  IMPORTANT: All tool operations (Read, Grep, Glob) should use the path parameter set to: ${targetDir}
 
   Below is an index of all available documents with their structure and
   previews. Use the Read tool to access full document contents when needed, or use
-  Grep to search across files.
+  Grep to search across files. Always specify path="${targetDir}" when using these tools.
 
   Guidelines:
   * Give a focused answer. The user can look up more detail if necessary.
@@ -57,6 +61,7 @@ const systemPrompt = $.dedent`
   * This is a one-time answer, not a chat, so don't prompt for followup questions.
   * Read only the documents you need - avoid reading all documents unless necessary.
 `
+}
 
 /////////////////////////////
 // DISPLAY HELPERS
@@ -92,14 +97,52 @@ async function runQuery(prompt: string, model: string): Promise<string> {
     }
 
     if (event.type === 'assistant') {
-      // Track assistant responses - check message structure
+      // Track assistant responses and log tool calls
       if ('message' in event) {
         const msg = event.message
         if (msg && typeof msg === 'object' && 'content' in msg) {
-          const content = msg.content as Array<{ type: string; text?: string }>
+          const content = msg.content as Array<{ type: string; name?: string; input?: unknown; text?: string }>
           const textContent = content.find((c) => c.type === 'text')
           if (textContent?.text) {
             finalAnswer = textContent.text
+          }
+
+          // Log tool calls
+          const toolUses = content.filter((c) => c.type === 'tool_use')
+          for (const tool of toolUses) {
+            if (tool.name) {
+              const input = tool.input as Record<string, unknown>
+              let details = ''
+
+              if (tool.name === 'Grep') {
+                details = ` pattern="${input.pattern}" glob="${input.glob || '*'}"${input['-i'] ? ' case-insensitive' : ''}`
+              } else if (tool.name === 'Read') {
+                const filePath = input.file_path as string
+                details = ` ${filePath.split('/').pop()}`
+              } else if (tool.name === 'Glob') {
+                details = ` pattern="${input.pattern}"`
+              } else if (tool.name === 'Bash') {
+                const cmd = (input.command as string)?.split('\n')[0]
+                details = ` ${cmd}`
+              }
+
+              console.log(`→ ${tool.name}${details}`)
+            }
+          }
+        }
+      }
+    }
+
+    // Log user messages (tool results)
+    if (event.type === 'user') {
+      if ('message' in event) {
+        const msg = event.message
+        if (msg && typeof msg === 'object' && 'content' in msg) {
+          const content = msg.content as Array<{ type: string; content?: string; tool_use_id?: string }>
+          const toolResults = content.filter((c) => c.type === 'tool_result')
+          for (const result of toolResults) {
+            const preview = result.content?.split('\n')[0]?.substring(0, 60) || '(empty)'
+            console.log(`  ← ${preview}`)
           }
         }
       }
@@ -124,15 +167,16 @@ await new Command()
     const userQuery = qParts.join(' ')
     if (!userQuery) throw new ValidationError('query is required')
 
-    const index = await getIndex(dir)
-    const indexXml = index.map(outlineXml).join('\n')
+    // Resolve directory path (handles ~ and makes absolute)
+    const targetDir = resolve(dir.replace(/^~/, Deno.env.get('HOME') || '~'))
+
+    const index = await getIndex(targetDir)
+    const indexXml = index.map((doc) => outlineXml(doc, targetDir)).join('\n')
 
     const prompt =
-      `${systemPrompt}\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
+      `${makeSystemPrompt(targetDir)}\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
 
-    const finalAnswer = await $.progress('Searching documentation...').with(() =>
-      runQuery(prompt, model)
-    )
+    const finalAnswer = await runQuery(prompt, model)
 
     if (finalAnswer) {
       await renderMd(finalAnswer)
