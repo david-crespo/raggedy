@@ -1,4 +1,12 @@
 {
+  "imports": {
+    "@std/path": "jsr:@std/path@1.0",
+    "@std/fs": "jsr:@std/fs@1.0",
+    "@cliffy/command": "jsr:@cliffy/command@1.0.0-rc.7",
+    "@david/dax": "jsr:@david/dax@0.42.0",
+    "remeda": "npm:remeda@2.22.1",
+    "@anthropic-ai/claude-agent-sdk": "npm:@anthropic-ai/claude-agent-sdk@0.1.21"
+  },
   "fmt": {
     "lineWidth": 92,
     "semiColons": false,

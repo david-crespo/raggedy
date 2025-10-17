@@ -1,10 +1,10 @@
-#! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow,ai
+#! /usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=glow,bun
 
-import { relative } from 'jsr:@std/path@1.0'
-import { walk } from 'jsr:@std/fs@1.0/walk'
-import { Command, ValidationError } from 'jsr:@cliffy/command@1.0.0-rc.7'
-import $ from 'jsr:@david/dax@0.42.0'
-import * as R from 'npm:remeda@2.22.1'
+import { relative } from '@std/path'
+import { walk } from '@std/fs/walk'
+import { Command, ValidationError } from '@cliffy/command'
+import $ from '@david/dax'
+import { query } from '@anthropic-ai/claude-agent-sdk'
 
 export interface Doc {
   relPath: string
@@ -25,17 +25,6 @@ function getIndex(dir: string): Promise<Doc[]> {
   })
 }
 
-const retrievalSystemPrompt = $.dedent`
-  You are a document retrieval system. Determine which of the provided documents are likely to be relevant to the user's question.
-
-  - Return at most 4 documents, but return fewer if possible. Avoid returning irrelevant documents!
-  - Put most relevant documents first
-  - Your response MUST be a parseable JSON array of relative paths
-    - Do NOT wrap the answer in a markdown code fence
-    - Do NOT include any commentary or explanation
-    - Do NOT attempt to answer the question
-`
-
 const outlineXml = (doc: Doc) =>
   $.dedent`
     <document>
@@ -44,50 +33,30 @@ const outlineXml = (doc: Doc) =>
       <head>${doc.head}</head>
     </document>`
 
-/**
- * Determine which subset of the documents is relevant to the question.
- */
-async function retrieve(index: Doc[], question: string, model: string) {
-  const docsXml = index.map(outlineXml).join('\n')
-  const systemPrompt = `${retrievalSystemPrompt}\n\n${docsXml}`
-  const result = await $`ai -m ${model} -s ${systemPrompt} ${question}`.text()
-
-  // TODO: render narrowing result so we can see the price
-  // await renderMd(['# Narrowing response', result].join('\n\n'))
-
-  // Sometimes the model includes text other than the array, so pull out the array
-  const match = result.match(/\[[^\]]*\]/)?.[0]
-  if (!match) throw new Error('Could not find JSON array in response: ' + result)
-
-  try {
-    const paths: string[] = JSON.parse(match)
-    // 4 is the max system prompts cacheable in the Anthropic API
-    const docs = paths.slice(0, 4)
-      .map((p) => index.find((doc) => doc.relPath === p))
-      // TODO: warn if there's a path returned that's not in the array
-      .filter((x) => !!x)
-    return { content: result, docs, meta: '' }
-  } catch (e) {
-    console.error('Could not parse JSON', result)
-    throw e
-  }
+const modelMap: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-3-5-sonnet-20241022',
 }
 
-const systemMsgBase = `
-Answer the user's question concisely based on the above documentation.
+function resolveModel(modelInput: string): string {
+  return modelMap[modelInput.toLowerCase()] || modelInput
+}
 
-* Give a focused answer. The user can look up more detail if necessary.
-* If you do not find the answer in the above sources, say so. You may speculate, but be clear that you are doing so.
-* Write naturally in prose. Do not overuse markdown headings and bullets.
-* Your answer must be in markdown format.
-* This is a one-time answer, not a chat, so don't prompt for followup questions
-`.trim()
+const systemPrompt = $.dedent`
+  You are a documentation assistant. Answer the user's question based on the documentation corpus.
 
-const answerSystemMsg = systemMsgBase + `
-* The documentation may be truncated, so do not assume it is comprehensive of the corpus or even all relevant documents in the corpus.`
+  Below is an index of all available documents with their structure and
+  previews. Use the Read tool to access full document contents when needed, or use
+  Grep to search across files.
 
-const allDocsAnswerSystemMsg = systemMsgBase + `
-* You have access to the complete documentation corpus, so you can provide comprehensive answers.`
+  Guidelines:
+  * Give a focused answer. The user can look up more detail if necessary.
+  * If you cannot find the answer in the documentation, say so. You may speculate, but be clear that you are doing so.
+  * Write naturally in prose. Do not overuse markdown headings and bullets.
+  * Your answer must be in markdown format.
+  * This is a one-time answer, not a chat, so don't prompt for followup questions.
+  * Read only the documents you need - avoid reading all documents unless necessary.
+`
 
 /////////////////////////////
 // DISPLAY HELPERS
@@ -103,56 +72,70 @@ async function renderMd(md: string, raw = false) {
 }
 
 /////////////////////////////
-// DO THE THING
+// QUERY PROCESSING
 /////////////////////////////
 
-// if docs are shorter than this, don't bother narrowing
-const THRESHOLD = 500_000
+async function runQuery(prompt: string, model: string): Promise<string> {
+  let finalAnswer = ''
 
-const numFmt = Intl.NumberFormat()
+  for await (
+    const event of query({
+      prompt,
+      options: { model: resolveModel(model), executable: 'bun' },
+    })
+  ) {
+    if (event.type === 'result') {
+      // Extract text from result message
+      if ('result' in event) {
+        finalAnswer = event.result
+      }
+    }
+
+    if (event.type === 'assistant') {
+      // Track assistant responses - check message structure
+      if ('message' in event) {
+        const msg = event.message
+        if (msg && typeof msg === 'object' && 'content' in msg) {
+          const content = msg.content as Array<{ type: string; text?: string }>
+          const textContent = content.find((c) => c.type === 'text')
+          if (textContent?.text) {
+            finalAnswer = textContent.text
+          }
+        }
+      }
+    }
+  }
+
+  return finalAnswer
+}
+
+/////////////////////////////
+// DO THE THING
+/////////////////////////////
 
 await new Command()
   .name('rgd')
   .description(`LLM-only RAG Q&A based on a directory of text files`)
   .example('', "rgd ~/repos/helix/book/src 'turn off automatic bracket insertion'")
   .helpOption('-h, --help', 'Show help')
-  .option('-m, --model <model>', 'Model to use', { default: 'flash' })
+  .option('-m, --model <model>', 'Model to use (haiku or sonnet)', { default: 'haiku' })
   .arguments('<directory> <...query>')
   .action(async ({ model }, dir, ...qParts) => {
-    const query = qParts.join(' ')
-    if (!query) throw new ValidationError('query is required')
+    const userQuery = qParts.join(' ')
+    if (!userQuery) throw new ValidationError('query is required')
 
     const index = await getIndex(dir)
+    const indexXml = index.map(outlineXml).join('\n')
 
-    const totalDocsLength = R.sumBy(index, (doc) => doc.content.length)
+    const prompt =
+      `${systemPrompt}\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
 
-    if (totalDocsLength <= THRESHOLD) {
-      // Skip retrieval and use all docs
-      const len = numFmt.format(totalDocsLength)
-      await renderMd(
-        `Using full corpus (length in chars: ${len} < ${numFmt.format(THRESHOLD)})`,
-      )
-      const docsContent = index.map((doc) => `<document>${doc.content}</document>`).join(
-        '\n',
-      )
-      const systemPrompt = `${allDocsAnswerSystemMsg}\n\n${docsContent}`
-      await $`ai -m ${model} -s ${systemPrompt} ${query}`
-      return
+    const finalAnswer = await $.progress('Searching documentation...').with(() =>
+      runQuery(prompt, model)
+    )
+
+    if (finalAnswer) {
+      await renderMd(finalAnswer)
     }
-
-    // Use normal retrieval process
-    const retrieved = await $.progress('Finding relevant files...')
-      .with(() => retrieve(index, query, model))
-    const sources = retrieved.docs.length > 0
-      ? retrieved.docs.map((d) => `- ${d.relPath}`).join('\n')
-      : 'No relevant documents found'
-    await renderMd(['# Relevant files', sources].join('\n\n'))
-
-    if (retrieved.docs.length === 0) return // no need for second call
-
-    const docsContent = retrieved.docs.map((doc) => `<document>${doc.content}</document>`)
-      .join('\n')
-    const prompt = `${query}\n\n${docsContent}`
-    await $`ai -m ${model} -s ${answerSystemMsg} ${prompt}`
   })
   .parse(Deno.args)
