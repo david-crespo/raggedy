@@ -87,183 +87,84 @@ const moneyFmt = Intl.NumberFormat('en-US', {
   maximumFractionDigits: 5,
 })
 
-const pricing: Record<
-  string,
-  { input: number; output: number; cacheWrite: number; cacheRead: number }
-> = {
-  'claude-haiku-4-5-20251001': {
-    input: 1.00,
-    output: 5.00,
-    cacheWrite: 1.25,
-    cacheRead: 0.10,
-  },
-  'claude-3-5-sonnet-20241022': {
-    input: 3.00,
-    output: 15.00,
-    cacheWrite: 3.75,
-    cacheRead: 0.30,
-  },
+function formatToolCall(name: string, input: Record<string, unknown>): string {
+  if (name === 'Grep') {
+    return `${name} pattern="${input['pattern']}" glob="${input['glob'] ?? '*'}"${
+      input['-i'] ? ' -i' : ''
+    }`
+  }
+  if (name === 'Read') {
+    return `${name} ${String(input['file_path'] ?? '').split('/').pop() || ''}`
+  }
+  if (name === 'Glob') return `${name} pattern="${input['pattern']}"`
+  if (name === 'Bash') return `${name} ${(String(input['command'] || '').split('\n')[0])}`
+  return name
+}
+
+function summarizeToolResult(name: string, out: unknown): string | null {
+  if (!out || typeof out !== 'object') return null
+  if (name === 'Bash') {
+    return String((out as any).output ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
+  }
+  if (name === 'Read') {
+    return String((out as any).content ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
+  }
+  if (name === 'Grep') {
+    return Array.isArray((out as any).matches)
+      ? `matches: ${(out as any).matches.length}`
+      : null
+  }
+  return null
 }
 
 async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
-  let finalAnswer = ''
-  let totalInputTokens = 0
-  let totalOutputTokens = 0
-  let cacheCreationTokens = 0
-  let cacheReadTokens = 0
-
-  for await (
-    const event of query({
-      prompt,
-      options: {
-        model: resolveModel(model),
-        executable: 'bun',
-        // without this it doesn't have permissions to read anything
-        additionalDirectories: [targetDir],
+  const result = await query({
+    prompt,
+    options: {
+      model: resolveModel(model),
+      executable: 'bun',
+      additionalDirectories: [targetDir],
+      hooks: {
+        PreToolUse: [{
+          hooks: [async (input) => {
+            const name = (input as any).tool_name as string
+            const args = (input as any).tool_input as Record<string, unknown>
+            console.log(formatToolCall(name, args))
+            return { continue: true }
+          }],
+        }],
+        PostToolUse: [{
+          hooks: [async (input) => {
+            const name = (input as any).tool_name as string
+            const out = (input as any).tool_response
+            const line = summarizeToolResult(name, out)
+            if (line) console.log('  ' + line)
+            return { continue: true }
+          }],
+        }],
       },
-    })
-  ) {
-    if (event.type === 'result') {
-      // Extract text from result message
-      if ('result' in event) {
-        finalAnswer = event.result
-      }
+      stderr: (data) => Deno.stderr.writeSync(new TextEncoder().encode(data)),
+    },
+  })
+
+  // The SDK already computes cumulative usage and cost for the session.
+  if ((result as any).usage) {
+    const u = (result as any).usage as {
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
     }
-
-    // Track usage
-    if ('usage' in event && event.usage) {
-      const usage = event.usage as {
-        input_tokens?: number
-        output_tokens?: number
-        cache_creation_input_tokens?: number
-        cache_read_input_tokens?: number
-      }
-      if (usage.input_tokens) totalInputTokens += usage.input_tokens
-      if (usage.output_tokens) totalOutputTokens += usage.output_tokens
-      if (usage.cache_creation_input_tokens) {
-        cacheCreationTokens += usage.cache_creation_input_tokens
-      }
-      if (usage.cache_read_input_tokens) cacheReadTokens += usage.cache_read_input_tokens
-    }
-
-    if (event.type === 'assistant') {
-      // Track assistant responses and log tool calls
-      if ('message' in event) {
-        const msg = event.message
-        if (msg && typeof msg === 'object' && 'content' in msg) {
-          const content = msg.content as Array<
-            { type: string; name?: string; input?: unknown; text?: string }
-          >
-          const textContent = content.find((c) => c.type === 'text')
-          if (textContent?.text) {
-            finalAnswer = textContent.text
-          }
-
-          // Log tool calls
-          const toolUses = content.filter((c) => c.type === 'tool_use')
-          for (const tool of toolUses) {
-            if (tool.name) {
-              const input = tool.input as Record<string, unknown>
-              let details = ''
-
-              if (tool.name === 'Grep') {
-                details = ` pattern="${input.pattern}" glob="${input.glob || '*'}"${
-                  input['-i'] ? ' case-insensitive' : ''
-                }`
-              } else if (tool.name === 'Read') {
-                const filePath = input.file_path as string
-                details = ` ${filePath.split('/').pop()}`
-              } else if (tool.name === 'Glob') {
-                details = ` pattern="${input.pattern}"`
-              } else if (tool.name === 'Bash') {
-                const cmd = (input.command as string)?.split('\n')[0]
-                details = ` ${cmd}`
-              }
-
-              console.log(`${tool.name}${details}`)
-            }
-          }
-        }
-      }
-    }
-
-    // Log user messages (tool results)
-    if (event.type === 'user') {
-      if ('message' in event) {
-        const msg = event.message
-        if (msg && typeof msg === 'object' && 'content' in msg) {
-          const content = msg.content as Array<{
-            type: string
-            content?: string | Array<{ type: string; text?: string }>
-            tool_use_id?: string
-            is_error?: boolean
-          }>
-          const toolResults = content.filter((c) => c.type === 'tool_result')
-          for (const result of toolResults) {
-            let preview = '(empty)'
-            if (result.content) {
-              if (typeof result.content === 'string') {
-                preview = result.content.split('\n')[0]?.substring(0, 60)
-              } else if (Array.isArray(result.content)) {
-                const textBlock = result.content.find((c) => c.type === 'text')
-                preview = textBlock?.text?.split('\n')[0]?.substring(0, 60) || '(empty)'
-              }
-            }
-
-            // Show full error messages
-            if (
-              result.is_error || preview.includes('error') || preview.includes('permission')
-            ) {
-              if (typeof result.content === 'string') {
-                console.log(`  ← ERROR: ${result.content}`)
-              } else if (Array.isArray(result.content)) {
-                const textBlock = result.content.find((c) => c.type === 'text')
-                if (textBlock?.text) {
-                  console.log(`  ← ERROR: ${textBlock.text}`)
-                }
-              } else {
-                console.log(`  ${preview}`)
-              }
-            } else {
-              console.log(`  ${preview}`)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Display usage summary
-  if (
-    totalInputTokens > 0 || totalOutputTokens > 0 || cacheCreationTokens > 0 ||
-    cacheReadTokens > 0
-  ) {
-    const totalTokens = totalInputTokens + totalOutputTokens + cacheCreationTokens +
-      cacheReadTokens
-
-    const modelId = resolveModel(model)
-    const prices = pricing[modelId] ||
-      { input: 3.00, output: 15.00, cacheWrite: 3.75, cacheRead: 0.30 }
-
-    const inputCost = (totalInputTokens / 1_000_000) * prices.input
-    const outputCost = (totalOutputTokens / 1_000_000) * prices.output
-    const cacheWriteCost = (cacheCreationTokens / 1_000_000) * prices.cacheWrite
-    const cacheReadCost = (cacheReadTokens / 1_000_000) * prices.cacheRead
-    const totalCost = inputCost + outputCost + cacheWriteCost + cacheReadCost
-
     const parts = [
-      `${totalInputTokens} in`,
-      `${totalOutputTokens} out`,
-      `${cacheCreationTokens} cache write`,
-      `${cacheReadTokens} cache read`,
+      `${u.input_tokens} in`,
+      `${u.output_tokens} out`,
+      `${u.cache_creation_input_tokens ?? 0} cache write`,
+      `${u.cache_read_input_tokens ?? 0} cache read`,
     ]
-
-    console.log()
-    console.log(`Tokens: ${totalTokens} = ${parts.join(' + ')}`)
-    console.log(`Cost:   ${moneyFmt.format(totalCost)}`)
+    const cost = Number((result as any).total_cost_usd ?? 0)
+    console.log(`\nTokens: ${parts.join(' + ')}\nCost:   ${moneyFmt.format(cost)}`)
   }
-
-  return finalAnswer
+  return (result as any).result ?? ''
 }
 
 /////////////////////////////
