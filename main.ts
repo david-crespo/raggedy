@@ -18,6 +18,7 @@ export interface Doc {
   headings: string
 }
 
+// TODO: fill this out, I don't think it's right
 interface ToolResponse {
   output?: string
   content?: string
@@ -141,6 +142,7 @@ function summarizeToolResult(
 }
 
 async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
+  const startTime = performance.now()
   const stream = query({
     prompt,
     options: {
@@ -181,16 +183,19 @@ async function runQuery(prompt: string, model: string, targetDir: string): Promi
 
   // The SDK already computes cumulative usage and cost for the session.
   if (resultMessage?.type === 'result' && resultMessage.subtype === 'success') {
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
     const u = resultMessage.usage
-    const parts = [
-      `${u.input_tokens} in`,
-      `${u.output_tokens} out`,
-      `${u.cache_creation_input_tokens ?? 0} cache write`,
-      `${u.cache_read_input_tokens ?? 0} cache read`,
-    ]
     const cost = resultMessage.total_cost_usd
-    console.log(`\nTokens: ${parts.join(' + ')}\nCost:   ${moneyFmt.format(cost)}`)
-    return resultMessage.result
+
+    const tokenParts = [`I: ${u.input_tokens}`]
+    if (u.cache_creation_input_tokens) {
+      tokenParts.push(`W: ${u.cache_creation_input_tokens}`)
+    }
+    if (u.cache_read_input_tokens) tokenParts.push(`R: ${u.cache_read_input_tokens}`)
+    const tokens = `${tokenParts.join(', ')} -> ${u.output_tokens}`
+
+    const meta = `\`${model}\` | ${elapsed} s | ${moneyFmt.format(cost)} | ${tokens}`
+    return meta + '\n\n' + resultMessage.result
   }
 
   return ''
@@ -223,9 +228,6 @@ await new Command()
 
     const answer = await runQuery(prompt, model, targetDir)
 
-    // TODO: get something more like this and render it with in the `renderMd`
-    // `sonnet-4.5`  | 8.6 s | $0.00588 | Tokens: 371 -> 318
-
-    await renderMd('---\n\n' + answer)
+    await renderMd(answer)
   })
   .parse(Deno.args)
