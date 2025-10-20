@@ -60,17 +60,17 @@ function makeSystemPrompt(targetDir: string) {
 
   IMPORTANT: All tool operations (Read, Grep, Glob) should use the path parameter set to: ${targetDir}
 
-  Below is an index of all available documents with their structure and
-  previews. Use the Read tool to access full document contents when needed, or use
-  Grep to search across files. Always specify path="${targetDir}" when using these tools.
+  Below is an index of all available documents. Use the Read tool to access
+  document contents when needed, or use Grep to search across files. Always
+  specify path="${targetDir}" when using these tools.
 
   Guidelines:
+  * Say what document you found the answer in.
   * Give a focused answer. The user can look up more detail if necessary.
   * If you cannot find the answer in the documentation, say so. You may speculate, but be clear that you are doing so.
   * Write naturally in prose. Do not overuse markdown headings and bullets.
   * Your answer must be in markdown format.
   * This is a one-time answer, not a chat, so don't prompt for followup questions.
-  * Read only the documents you need - avoid reading all documents unless necessary.
 `
 }
 
@@ -98,7 +98,10 @@ const moneyFmt = Intl.NumberFormat('en-US', {
   maximumFractionDigits: 5,
 })
 
-function formatToolCall({ tool_name: name, tool_input }: PreToolUseHookInput): string {
+function formatToolCall(
+  { tool_name: name, tool_input }: PreToolUseHookInput,
+  targetDir: string,
+): string {
   const toolInput = tool_input as Record<string, unknown>
   if (name === 'Grep') {
     return `${name} pattern="${toolInput.pattern}" glob="${toolInput.glob ?? '*'}"${
@@ -106,7 +109,11 @@ function formatToolCall({ tool_name: name, tool_input }: PreToolUseHookInput): s
     }`
   }
   if (name === 'Read') {
-    return `${name} ${String(toolInput.file_path ?? '').split('/').pop() || ''}`
+    const filePath = String(toolInput.file_path ?? '')
+    const relPath = filePath.startsWith(targetDir)
+      ? relative(targetDir, filePath)
+      : filePath.split('/').pop() || ''
+    return `${name} ${relPath}`
   }
   if (name === 'Glob') return `${name} pattern="${toolInput.pattern}"`
   if (name === 'Bash') {
@@ -144,7 +151,7 @@ async function runQuery(prompt: string, model: string, targetDir: string): Promi
         PreToolUse: [{
           hooks: [(input) => {
             if (input.hook_event_name === 'PreToolUse') {
-              const msg = formatToolCall(input)
+              const msg = formatToolCall(input, targetDir)
               console.log(msg)
             }
             return Promise.resolve({})
