@@ -20,7 +20,7 @@ function getIndex(dir: string): Promise<Doc[]> {
     const relPath = relative(dir, path)
     const headingPattern = path.endsWith('.adoc') ? /^=+\s+.*/gm : /^#+\s+.*/gm
     const headings = (content.match(headingPattern)?.map((h) => h.trim()) || []).join('\n')
-    const head = content.slice(0, 800)
+    const head = content.slice(0, 400)
     return { relPath, content, head, headings }
   })
 }
@@ -48,9 +48,13 @@ const outlineXml = (doc: Doc) =>
  * Determine which subset of the documents is relevant to the question.
  */
 async function retrieve(index: Doc[], question: string, model: string) {
-  const docsXml = index.map(outlineXml).join('\n')
-  const systemPrompt = `${retrievalSystemPrompt}\n\n${docsXml}`
-  const result = await $`ai -m ${model} -s ${systemPrompt} ${question}`.text()
+  const systemPrompt = [
+    index.map(outlineXml).join('\n'),
+    retrievalSystemPrompt,
+  ].join('\n\n')
+  const prompt =
+    `You are a document retrieval system. Determine which of the provided documents are likely to be relevant to the user's question. Do not answer the question, only give a JSON array of relevant documents.\n\n<question>${question}</question>`
+  const result = await $`ai -m ${model} -s ${systemPrompt} ${prompt} --raw`.text()
 
   // TODO: render narrowing result so we can see the price
   // await renderMd(['# Narrowing response', result].join('\n\n'))
@@ -76,6 +80,7 @@ async function retrieve(index: Doc[], question: string, model: string) {
 const systemMsgBase = `
 Answer the user's question concisely based on the above documentation.
 
+* Say what document you found the answer in.
 * Give a focused answer. The user can look up more detail if necessary.
 * If you do not find the answer in the above sources, say so. You may speculate, but be clear that you are doing so.
 * Write naturally in prose. Do not overuse markdown headings and bullets.
