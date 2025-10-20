@@ -4,13 +4,24 @@ import { relative, resolve } from '@std/path'
 import { walk } from '@std/fs/walk'
 import { Command, ValidationError } from '@cliffy/command'
 import $ from '@david/dax'
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import {
+  type PostToolUseHookInput,
+  type PreToolUseHookInput,
+  query,
+  type SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk'
 
 export interface Doc {
   relPath: string
   content: string
   head: string
   headings: string
+}
+
+interface ToolResponse {
+  output?: string
+  content?: string
+  matches?: unknown[]
 }
 
 function getIndex(dir: string): Promise<Doc[]> {
@@ -87,38 +98,43 @@ const moneyFmt = Intl.NumberFormat('en-US', {
   maximumFractionDigits: 5,
 })
 
-function formatToolCall(name: string, input: Record<string, unknown>): string {
+function formatToolCall({ tool_name: name, tool_input }: PreToolUseHookInput): string {
+  const toolInput = tool_input as Record<string, unknown>
   if (name === 'Grep') {
-    return `${name} pattern="${input['pattern']}" glob="${input['glob'] ?? '*'}"${
-      input['-i'] ? ' -i' : ''
+    return `${name} pattern="${toolInput.pattern}" glob="${toolInput.glob ?? '*'}"${
+      toolInput['-i'] ? ' -i' : ''
     }`
   }
   if (name === 'Read') {
-    return `${name} ${String(input['file_path'] ?? '').split('/').pop() || ''}`
+    return `${name} ${String(toolInput.file_path ?? '').split('/').pop() || ''}`
   }
-  if (name === 'Glob') return `${name} pattern="${input['pattern']}"`
-  if (name === 'Bash') return `${name} ${(String(input['command'] || '').split('\n')[0])}`
+  if (name === 'Glob') return `${name} pattern="${toolInput.pattern}"`
+  if (name === 'Bash') {
+    return `${name} ${(String(toolInput.command || '').split('\n')[0])}`
+  }
   return name
 }
 
-function summarizeToolResult(name: string, out: unknown): string | null {
-  if (!out || typeof out !== 'object') return null
+function summarizeToolResult(
+  { tool_name: name, tool_response }: PostToolUseHookInput,
+): string | null {
+  if (!tool_response || typeof tool_response !== 'object') return null
+  const response = tool_response as ToolResponse
   if (name === 'Bash') {
-    return String((out as any).output ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
+    return String(response.output ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
   }
   if (name === 'Read') {
-    return String((out as any).content ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
+    // don't print anything, the first line isn't useful anyway
+    // return String(response.content ?? '').split('\n')[0]?.slice(0, 60) || '(empty)'
   }
   if (name === 'Grep') {
-    return Array.isArray((out as any).matches)
-      ? `matches: ${(out as any).matches.length}`
-      : null
+    return Array.isArray(response.matches) ? `matches: ${response.matches.length}` : null
   }
   return null
 }
 
 async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
-  const result = await query({
+  const stream = query({
     prompt,
     options: {
       model: resolveModel(model),
@@ -126,45 +142,51 @@ async function runQuery(prompt: string, model: string, targetDir: string): Promi
       additionalDirectories: [targetDir],
       hooks: {
         PreToolUse: [{
-          hooks: [async (input) => {
-            const name = (input as any).tool_name as string
-            const args = (input as any).tool_input as Record<string, unknown>
-            console.log(formatToolCall(name, args))
-            return { continue: true }
+          hooks: [(input) => {
+            if (input.hook_event_name === 'PreToolUse') {
+              const msg = formatToolCall(input)
+              console.log(msg)
+            }
+            return Promise.resolve({})
           }],
         }],
         PostToolUse: [{
-          hooks: [async (input) => {
-            const name = (input as any).tool_name as string
-            const out = (input as any).tool_response
-            const line = summarizeToolResult(name, out)
-            if (line) console.log('  ' + line)
-            return { continue: true }
+          hooks: [(input) => {
+            if (input.hook_event_name === 'PostToolUse') {
+              const line = summarizeToolResult(input)
+              if (line) console.log('  ' + line)
+            }
+            return Promise.resolve({})
           }],
         }],
       },
-      stderr: (data) => Deno.stderr.writeSync(new TextEncoder().encode(data)),
+      // stderr: (data) => Deno.stderr.writeSync(new TextEncoder().encode(data)),
     },
   })
 
-  // The SDK already computes cumulative usage and cost for the session.
-  if ((result as any).usage) {
-    const u = (result as any).usage as {
-      input_tokens: number
-      output_tokens: number
-      cache_creation_input_tokens?: number
-      cache_read_input_tokens?: number
+  // Consume the stream to get the final result
+  let resultMessage: SDKMessage | undefined
+  for await (const message of stream) {
+    if (message.type === 'result') {
+      resultMessage = message
     }
+  }
+
+  // The SDK already computes cumulative usage and cost for the session.
+  if (resultMessage?.type === 'result' && resultMessage.subtype === 'success') {
+    const u = resultMessage.usage
     const parts = [
       `${u.input_tokens} in`,
       `${u.output_tokens} out`,
       `${u.cache_creation_input_tokens ?? 0} cache write`,
       `${u.cache_read_input_tokens ?? 0} cache read`,
     ]
-    const cost = Number((result as any).total_cost_usd ?? 0)
+    const cost = resultMessage.total_cost_usd
     console.log(`\nTokens: ${parts.join(' + ')}\nCost:   ${moneyFmt.format(cost)}`)
+    return resultMessage.result
   }
-  return (result as any).result ?? ''
+
+  return ''
 }
 
 /////////////////////////////
