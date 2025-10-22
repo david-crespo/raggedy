@@ -21,7 +21,7 @@
     "jsr:@std/path@^1.1.1": "1.1.2",
     "jsr:@std/path@^1.1.2": "1.1.2",
     "jsr:@std/text@~1.0.7": "1.0.16",
-    "npm:@anthropic-ai/claude-agent-sdk@0.1.22": "0.1.22_zod@3.25.76",
+    "npm:@anthropic-ai/claude-agent-sdk@0.1.25": "0.1.25_zod@3.25.76",
     "npm:remeda@2.32.0": "2.32.0"
   },
   "jsr": {
@@ -108,8 +108,8 @@
     }
   },
   "npm": {
-    "@anthropic-ai/claude-agent-sdk@0.1.22_zod@3.25.76": {
-      "integrity": "sha512-lDwbcwh5goRVUHRRqvX9v6Vj38VME1L+QIaLWzdqbK3Lwkkz9PVLNQFRDEyUOSNd9Fm4cAlfQZ0RCVe8tuo9TA==",
+    "@anthropic-ai/claude-agent-sdk@0.1.25_zod@3.25.76": {
+      "integrity": "sha512-qwuydYaA3uamz4ivDzYXfL2PBjGwc0+beeIyo3nvtZQOtFLjH7xPdBK2w3+9KnB3L6V7VooAMdTXPpQyxCwcOg==",
       "dependencies": [
         "zod"
       ],
@@ -211,7 +211,7 @@
       "jsr:@david/dax@0.43.2",
       "jsr:@std/fs@^1.0.19",
       "jsr:@std/path@^1.1.2",
-      "npm:@anthropic-ai/claude-agent-sdk@0.1.22",
+      "npm:@anthropic-ai/claude-agent-sdk@0.1.25",
       "npm:remeda@2.32.0"
     ]
   }

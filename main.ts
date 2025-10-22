@@ -32,7 +32,7 @@ function getIndex(dir: string): Promise<Doc[]> {
     const relPath = relative(dir, path)
     const headingPattern = path.endsWith('.adoc') ? /^=+\s+.*/gm : /^#+\s+.*/gm
     const headings = (content.match(headingPattern)?.map((h) => h.trim()) || []).join('\n')
-    const head = content.slice(0, 800)
+    const head = content.slice(0, 400)
     return { relPath, content, head, headings }
   })
 }
@@ -47,8 +47,8 @@ const outlineXml = (doc: Doc, baseDir: string) =>
     </document>`
 
 const modelMap: Record<string, string> = {
-  haiku: 'claude-haiku-4-5-20251001',
-  sonnet: 'claude-3-5-sonnet-20241022',
+  haiku: 'claude-haiku-4-5',
+  sonnet: 'claude-sonnet-4-5',
 }
 
 function resolveModel(modelInput: string): string {
@@ -57,22 +57,22 @@ function resolveModel(modelInput: string): string {
 
 function makeSystemPrompt(targetDir: string) {
   return $.dedent`
-  You are a documentation assistant. Answer the user's question based on the documentation corpus.
+    You are a documentation assistant. Answer the user's question based on the
+    local documentation corpus ONLY. Only make claims you can substantiate with
+    reference to the documents.
 
-  IMPORTANT: All tool operations (Read, Grep, Glob) should use the path parameter set to: ${targetDir}
+    Above is an index of available documents. Use the Read tool to access
+    document contents when needed, or use Grep to search across files. Always
+    specify path="${targetDir}" when using these tools.
 
-  Below is an index of all available documents. Use the Read tool to access
-  document contents when needed, or use Grep to search across files. Always
-  specify path="${targetDir}" when using these tools.
-
-  Guidelines:
-  * Say what document you found the answer in.
-  * Give a focused answer. The user can look up more detail if necessary.
-  * If you cannot find the answer in the documentation, say so. You may speculate, but be clear that you are doing so.
-  * Write naturally in prose. Do not overuse markdown headings and bullets.
-  * Your answer must be in markdown format.
-  * This is a one-time answer, not a chat, so don't prompt for followup questions.
-`
+    Guidelines:
+    * Say what document you found the answer in.
+    * Give a focused answer. The user can look up more detail if necessary.
+    * If you cannot find the answer in the documentation, say so. You may speculate, but be clear that you are doing so.
+    * Write naturally in prose. Do not overuse markdown headings and bullets.
+    * Your answer must be in markdown format.
+    * This is a one-time answer, not a chat, so don't prompt for followup questions.
+  `
 }
 
 /////////////////////////////
@@ -141,12 +141,18 @@ function summarizeToolResult(
   return null
 }
 
-async function runQuery(prompt: string, model: string, targetDir: string): Promise<string> {
+async function runQuery(
+  prompt: string,
+  systemPrompt: string,
+  model: string,
+  targetDir: string,
+): Promise<string> {
   const startTime = performance.now()
   const stream = query({
     prompt,
     options: {
-      model: resolveModel(model),
+      systemPrompt,
+      model,
       executable: 'bun',
       additionalDirectories: [targetDir],
       hooks: {
@@ -219,14 +225,12 @@ await new Command()
     // Resolve directory path (handles ~ and makes absolute)
     const targetDir = resolve(dir.replace(/^~/, Deno.env.get('HOME') || '~'))
 
-    const index = await getIndex(targetDir)
-    const indexXml = index.map((doc) => outlineXml(doc, targetDir)).join('\n')
+    const docs = await getIndex(targetDir)
+    const indexXml = docs.map((doc) => outlineXml(doc, targetDir)).join('\n')
+    const index = `<document-index>\n${indexXml}\n</document-index>`
+    const systemPrompt = index + '\n\n' + makeSystemPrompt(targetDir)
 
-    const prompt = `${
-      makeSystemPrompt(targetDir)
-    }\n\n<document-index>\n${indexXml}\n</document-index>\n\nUser question: ${userQuery}`
-
-    const answer = await runQuery(prompt, model, targetDir)
+    const answer = await runQuery(userQuery, systemPrompt, resolveModel(model), targetDir)
 
     await renderMd(answer)
   })
